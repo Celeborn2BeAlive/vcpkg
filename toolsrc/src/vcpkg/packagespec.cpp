@@ -1,5 +1,6 @@
 #include "pch.h"
 
+#include <vcpkg/base/checks.h>
 #include <vcpkg/base/util.h>
 #include <vcpkg/packagespec.h>
 #include <vcpkg/packagespecparseresult.h>
@@ -16,8 +17,14 @@ namespace vcpkg
 
     std::string FeatureSpec::to_string() const
     {
-        if (feature().empty()) return spec().to_string();
-        return Strings::format("%s[%s]:%s", name(), feature(), triplet());
+        std::string ret;
+        this->to_string(ret);
+        return ret;
+    }
+    void FeatureSpec::to_string(std::string& out) const
+    {
+        if (feature().empty()) return spec().to_string(out);
+        Strings::append(out, name(), '[', feature(), "]:", triplet());
     }
 
     std::vector<FeatureSpec> FeatureSpec::from_strings_and_triplet(const std::vector<std::string>& depends,
@@ -39,7 +46,7 @@ namespace vcpkg
                 for (auto&& feature : spec->features)
                     f_specs.push_back(FeatureSpec{pspec, feature});
 
-                if (spec->features.empty()) f_specs.push_back(FeatureSpec{pspec, ""});
+                if (spec->features.empty()) f_specs.push_back(FeatureSpec{pspec, "core"});
             }
             else
             {
@@ -52,16 +59,44 @@ namespace vcpkg
         return f_specs;
     }
 
-    std::vector<FeatureSpec> FullPackageSpec::to_feature_specs(const std::vector<FullPackageSpec>& specs)
+    std::vector<FeatureSpec> FullPackageSpec::to_feature_specs(const std::vector<std::string>& default_features,
+                                                               const std::vector<std::string>& all_features) const
     {
-        std::vector<FeatureSpec> ret;
-        for (auto&& spec : specs)
+        std::vector<FeatureSpec> feature_specs;
+
+        if (Util::find(features, "*") != features.end())
         {
-            ret.emplace_back(spec.package_spec, "");
-            for (auto&& feature : spec.features)
-                ret.emplace_back(spec.package_spec, feature);
+            feature_specs.emplace_back(package_spec, "core");
+            for (const std::string& feature : all_features)
+            {
+                feature_specs.emplace_back(package_spec, feature);
+            }
         }
-        return ret;
+        else
+        {
+            bool core = false;
+            for (const std::string& feature : features)
+            {
+                feature_specs.emplace_back(package_spec, feature);
+
+                if (!core)
+                {
+                    core = feature == "core";
+                }
+            }
+
+            if (!core)
+            {
+                feature_specs.emplace_back(package_spec, "core");
+
+                for (const std::string& def : default_features)
+                {
+                    feature_specs.emplace_back(package_spec, def);
+                }
+            }
+        }
+
+        return feature_specs;
     }
 
     ExpectedT<FullPackageSpec, PackageSpecParseResult> FullPackageSpec::from_string(const std::string& spec_as_string,
@@ -71,7 +106,7 @@ namespace vcpkg
         if (auto p = res.get())
         {
             FullPackageSpec fspec;
-            Triplet t = p->triplet.empty() ? default_triplet : Triplet::from_canonical_name(p->triplet);
+            Triplet t = p->triplet.empty() ? default_triplet : Triplet::from_canonical_name(std::move(p->triplet));
             fspec.package_spec = PackageSpec::from_name_and_triplet(p->name, t).value_or_exit(VCPKG_LINE_INFO);
             fspec.features = std::move(p->features);
             return fspec;
@@ -119,6 +154,7 @@ namespace vcpkg
     std::string PackageSpec::dir() const { return Strings::format("%s_%s", this->m_name, this->m_triplet); }
 
     std::string PackageSpec::to_string() const { return Strings::format("%s:%s", this->name(), this->triplet()); }
+    void PackageSpec::to_string(std::string& s) const { Strings::append(s, this->name(), ':', this->triplet()); }
 
     bool operator==(const PackageSpec& left, const PackageSpec& right)
     {
